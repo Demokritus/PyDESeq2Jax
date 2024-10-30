@@ -9,6 +9,10 @@ from typing import cast
 
 import anndata as ad  # type: ignore
 import numpy as np
+import jax
+import jax.numpy as jnp
+from jax import jit
+
 import pandas as pd
 from scipy.optimize import minimize
 from scipy.special import polygamma  # type: ignore
@@ -391,7 +395,8 @@ class DeseqDataSet(ad.AnnData):
             self.obsm["design_matrix"] = self.obsm["design_matrix_buffer"].copy()
             del self.obsm["design_matrix_buffer"]
 
-    def vst_transform(self, counts: Optional[np.ndarray] = None) -> np.ndarray:
+    @jit
+    def vst_transform(self, counts: Optional[np.ndarray] = None) -> jnp.ndarray:
         """Apply the variance stabilizing transformation.
 
         Uses the results from the ``vst_fit`` method.
@@ -442,12 +447,12 @@ class DeseqDataSet(ad.AnnData):
                 raise RuntimeError("Fit the dispersion curve prior to applying VST.")
 
             a0, a1 = self.uns["vst_trend_coeffs"]
-            return np.log2(
+            return jnp.log2(
                 (
                     1
                     + a1
                     + 2 * a0 * normed_counts
-                    + 2 * np.sqrt(a0 * normed_counts * (1 + a1 + a0 * normed_counts))
+                    + 2 * jnp.sqrt(a0 * normed_counts * (1 + a1 + a0 * normed_counts))
                 )
                 / (4 * a0)
             )
@@ -456,10 +461,10 @@ class DeseqDataSet(ad.AnnData):
             use_for_mean = gene_dispersions > 10 * self.min_disp
             mean_disp = trim_mean(gene_dispersions[use_for_mean], proportiontocut=0.001)
             return (
-                2 * np.arcsinh(np.sqrt(mean_disp * normed_counts))
-                - np.log(mean_disp)
-                - np.log(4)
-            ) / np.log(2)
+                2 * jnp.arcsinh(np.sqrt(mean_disp * normed_counts))
+                - jnp.log(mean_disp)
+                - jnp.log(4)
+            ) / jnp.log(2)
         else:
             raise NotImplementedError(
                 f"Found fit_type '{self.vst_fit_type}'. Expected 'parametric' or 'mean'."
@@ -554,7 +559,7 @@ class DeseqDataSet(ad.AnnData):
 
         # If control genes are provided, set a mask where those genes are True
         if control_genes is not None:
-            _control_mask = np.zeros(self.X.shape[1], dtype=bool)
+            _control_mask = jnp.zeros(self.X.shape[1], dtype=bool)
 
             # Use AnnData internal indexing to get gene index array
             # Allows bool/int/var_name to be provided
@@ -564,15 +569,15 @@ class DeseqDataSet(ad.AnnData):
 
         # Otherwise mask all genes to be True
         else:
-            _control_mask = np.ones(self.X.shape[1], dtype=bool)
+            _control_mask = jnp.ones(self.X.shape[1], dtype=bool)
 
         if fit_type == "iterative":
             self._fit_iterate_size_factors()
 
         elif fit_type == "poscounts":
             # Calculate logcounts for x > 0 and take the mean for each gene
-            log_counts = np.zeros_like(self.X, dtype=float)
-            np.log(self.X, out=log_counts, where=self.X != 0)
+            log_counts = jnp.zeros_like(self.X, dtype=float)
+            jnp.log(self.X, out=log_counts, where=self.X != 0)
             logmeans = log_counts.mean(0)
 
             # Determine which genes are usable (finite logmeans)
@@ -581,14 +586,14 @@ class DeseqDataSet(ad.AnnData):
 
             # Calculate size factor per sample
             def sizeFactor(x):
-                _mask = np.logical_and(_control_mask, x > 0)
-                return np.exp(np.median(np.log(x[_mask]) - logmeans[_mask]))
+                _mask = jnp.logical_and(_control_mask, x > 0)
+                return jnp.exp(np.median(np.log(x[_mask]) - logmeans[_mask]))
 
-            sf = np.apply_along_axis(sizeFactor, 1, self.X)
+            sf = jnp.apply_along_axis(sizeFactor, 1, self.X)
             del log_counts
 
             # Normalize size factors to a geometric mean of 1 to match DESeq
-            self.obsm["size_factors"] = sf / (np.exp(np.mean(np.log(sf))))
+            self.obsm["size_factors"] = sf / (jnp.exp(jnp.mean(jnp.log(sf))))
             self.layers["normed_counts"] = self.X / self.obsm["size_factors"][:, None]
             self.logmeans = logmeans
 
